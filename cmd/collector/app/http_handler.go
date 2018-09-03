@@ -40,12 +40,14 @@ var (
 	}
 )
 
-// APIHandler handles all HTTP calls to the collector
+// APIHandler用于接收client通过http发送的trace包
+//
+// 注意：agent processor是通过tchannel框架发送的trace包，tcp连接
 type APIHandler struct {
 	jaegerBatchesHandler JaegerBatchesHandler
 }
 
-// NewAPIHandler returns a new APIHandler
+// NewAPIHandler方法创建一个APIHandler实例, 这里只接收jaeger compact协议格式
 func NewAPIHandler(
 	jaegerBatchesHandler JaegerBatchesHandler,
 ) *APIHandler {
@@ -54,11 +56,16 @@ func NewAPIHandler(
 	}
 }
 
-// RegisterRoutes registers routes for this handler on the given router
+// RegisterRoutes方法用于路由注册
+// http method: post
+// http route: /api/traces
+// http handler: APIHandler saveSpan
 func (aH *APIHandler) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/traces", aH.saveSpan).Methods(http.MethodPost)
 }
 
+// 处理route: /api/traces post
+// 接收http trace数据，并发送给span_process.go进行数据格式转换和存储
 func (aH *APIHandler) saveSpan(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := ioutil.ReadAll(r.Body)
 	r.Body.Close()
@@ -89,6 +96,7 @@ func (aH *APIHandler) saveSpan(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := tchanThrift.NewContext(time.Minute)
 	defer cancel()
 	batches := []*tJaeger.Batch{batch}
+	// 构建批量trace, 并转化为jaeger compact格式, 然后进行存储
 	if _, err = aH.jaegerBatchesHandler.SubmitBatches(ctx, batches); err != nil {
 		http.Error(w, fmt.Sprintf("Cannot submit Jaeger batch: %v", err), http.StatusInternalServerError)
 		return

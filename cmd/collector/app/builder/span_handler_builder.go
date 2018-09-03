@@ -34,7 +34,7 @@ var (
 	errMissingElasticSearchConfig = errors.New("ElasticSearch not configured")
 )
 
-// SpanHandlerBuilder holds configuration required for handlers
+// SpanHandlerBuilder用于存储一些Collector server连接参数。zipkin和jaeger提交span的handler等
 type SpanHandlerBuilder struct {
 	logger         *zap.Logger
 	metricsFactory metrics.Factory
@@ -42,7 +42,7 @@ type SpanHandlerBuilder struct {
 	spanWriter     spanstore.Writer
 }
 
-// NewSpanHandlerBuilder returns new SpanHandlerBuilder with configured span storage.
+// NewSpanHandlerBuilder返回一个SpanHandlerBuilder实例
 func NewSpanHandlerBuilder(cOpts *CollectorOptions, spanWriter spanstore.Writer, opts ...basicB.Option) (*SpanHandlerBuilder, error) {
 	options := basicB.ApplyOptions(opts...)
 
@@ -56,7 +56,7 @@ func NewSpanHandlerBuilder(cOpts *CollectorOptions, spanWriter spanstore.Writer,
 	return spanHb, nil
 }
 
-// BuildHandlers builds span handlers (Zipkin, Jaeger)
+// BuildHandlers构建span handlers(Zipkin, Jaeger)
 func (spanHb *SpanHandlerBuilder) BuildHandlers() (app.ZipkinSpansHandler, app.JaegerBatchesHandler) {
 	hostname, _ := os.Hostname()
 	hostMetrics := spanHb.metricsFactory.Namespace("", map[string]string{"host": hostname})
@@ -68,6 +68,7 @@ func (spanHb *SpanHandlerBuilder) BuildHandlers() (app.ZipkinSpansHandler, app.J
 		zs.NewErrorTagSanitizer(),
 	)
 
+	// 创建一个SpanProcessor实例，用于处理*model.Span并生产和消费它，最终存储到后端存储中
 	spanProcessor := app.NewSpanProcessor(
 		spanHb.spanWriter,
 		app.Options.ServiceMetrics(spanHb.metricsFactory),
@@ -78,6 +79,7 @@ func (spanHb *SpanHandlerBuilder) BuildHandlers() (app.ZipkinSpansHandler, app.J
 		app.Options.QueueSize(spanHb.collectorOpts.QueueSize),
 	)
 
+	// 分别获取zipkin数据格式的*model.Span处理函数和jaeger数据格式的*model.Span处理函数
 	return app.NewZipkinSpanHandler(spanHb.logger, spanProcessor, zSanitizer),
 		app.NewJaegerSpanHandler(spanHb.logger, spanProcessor)
 }

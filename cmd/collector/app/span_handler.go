@@ -35,30 +35,34 @@ const (
 	UnknownFormatType = "unknown"
 )
 
-// ZipkinSpansHandler consumes and handles zipkin spans
+// ZipkinSpansHandler interface与JaegerBatchedHandler interface
+// 用于接收到的trace包，并存储trace
+
+// ZipkinSpansHandler interface用于接收和存储zipkin spans
 type ZipkinSpansHandler interface {
 	// SubmitZipkinBatch records a batch of spans in Zipkin Thrift format
 	SubmitZipkinBatch(ctx thrift.Context, spans []*zipkincore.Span) ([]*zipkincore.Response, error)
 }
 
-// JaegerBatchesHandler consumes and handles Jaeger batches
+// JaegerBatchesHandler interface用于接收和处理jaeger batches
 type JaegerBatchesHandler interface {
 	// SubmitBatches records a batch of spans in Jaeger Thrift format
 	SubmitBatches(ctx thrift.Context, batches []*jaeger.Batch) ([]*jaeger.BatchSubmitResponse, error)
 }
 
-// SpanProcessor handles model spans
+// SpanProcessor interface用于处理model spans, 主要是spans入channel队列，等待消费者消费并通过saveSpans方法存储model.Span
 type SpanProcessor interface {
 	// ProcessSpans processes model spans and return with either a list of true/false success or an error
 	ProcessSpans(mSpans []*model.Span, spanFormat string) ([]bool, error)
 }
 
+// jaegerBatchesHandler实现了JaegerBatchesHandler interface
 type jaegerBatchesHandler struct {
 	logger         *zap.Logger
 	modelProcessor SpanProcessor
 }
 
-// NewJaegerSpanHandler returns a JaegerBatchesHandler
+// NewJaegerSpanHandler方法用于创建一个JaegerBatchedHandler实例
 func NewJaegerSpanHandler(logger *zap.Logger, modelProcessor SpanProcessor) JaegerBatchesHandler {
 	return &jaegerBatchesHandler{
 		logger:         logger,
@@ -66,14 +70,18 @@ func NewJaegerSpanHandler(logger *zap.Logger, modelProcessor SpanProcessor) Jaeg
 	}
 }
 
+// SubmitBatches方法用于接收批量的trace包，并把数据转换为model.Span，并交给span processer处理后发送到channel队列，供消费者获取并存储trace
 func (jbh *jaegerBatchesHandler) SubmitBatches(ctx thrift.Context, batches []*jaeger.Batch) ([]*jaeger.BatchSubmitResponse, error) {
 	responses := make([]*jaeger.BatchSubmitResponse, 0, len(batches))
+	// 遍历trace包
 	for _, batch := range batches {
 		mSpans := make([]*model.Span, 0, len(batch.Spans))
+		// 对于trace包，构建成model.Span
 		for _, span := range batch.Spans {
 			mSpan := jConv.ToDomainSpan(span, batch.Process)
 			mSpans = append(mSpans, mSpan)
 		}
+		// model.Span数据发送给span processor统一处理，格式包括jaeger和zipkin
 		oks, err := jbh.modelProcessor.ProcessSpans(mSpans, JaegerFormatType)
 		if err != nil {
 			jbh.logger.Error("Collector failed to process span batch", zap.Error(err))
@@ -96,13 +104,14 @@ func (jbh *jaegerBatchesHandler) SubmitBatches(ctx thrift.Context, batches []*ja
 	return responses, nil
 }
 
+// zipkinSpanHandler用于zipkin格式的trace包处理和存储
 type zipkinSpanHandler struct {
 	logger         *zap.Logger
 	sanitizer      zipkinS.Sanitizer
 	modelProcessor SpanProcessor
 }
 
-// NewZipkinSpanHandler returns a ZipkinSpansHandler
+// NewZipkinSpanHandler创建一个ZipkinSpansHandler实例
 func NewZipkinSpanHandler(logger *zap.Logger, modelHandler SpanProcessor, sanitizer zipkinS.Sanitizer) ZipkinSpansHandler {
 	return &zipkinSpanHandler{
 		logger:         logger,
@@ -111,13 +120,16 @@ func NewZipkinSpanHandler(logger *zap.Logger, modelHandler SpanProcessor, saniti
 	}
 }
 
-// SubmitZipkinBatch records a batch of spans already in Zipkin Thrift format.
+// SubmitZipkinBatch方法记录Zipkin Thrift格式的trace数据
 func (h *zipkinSpanHandler) SubmitZipkinBatch(ctx thrift.Context, spans []*zipkincore.Span) ([]*zipkincore.Response, error) {
 	mSpans := make([]*model.Span, 0, len(spans))
+	// 这个不能和jaeger thrift一样批量处理trace包
+	// 把接收到的span转化为model.Span
 	for _, span := range spans {
 		sanitized := h.sanitizer.Sanitize(span)
 		mSpans = append(mSpans, convertZipkinToModel(sanitized, h.logger)...)
 	}
+	// 交给span processor统一处理，并发送到channel队列，供消费者消费存储model.Span
 	bools, err := h.modelProcessor.ProcessSpans(mSpans, ZipkinFormatType)
 	if err != nil {
 		h.logger.Error("Collector failed to process Zipkin span batch", zap.Error(err))
@@ -134,7 +146,7 @@ func (h *zipkinSpanHandler) SubmitZipkinBatch(ctx thrift.Context, spans []*zipki
 	return responses, nil
 }
 
-// ConvertZipkinToModel is a helper function that logs warnings during conversion
+// ConvertZipkinToModel方法用于把trace由zipkincore.Span格式数据转换为model.Span格式数据
 func convertZipkinToModel(zSpan *zipkincore.Span, logger *zap.Logger) []*model.Span {
 	mSpans, err := zipkin.ToDomainSpan(zSpan)
 	if err != nil {
